@@ -102,6 +102,7 @@ A top-level command appears directly under ``lmcache <command>``.
 .. code-block:: bash
 
    lmcache hello --name LMCache
+   lmcache tool list-commands --format json
 
 .. note::
 
@@ -330,6 +331,16 @@ demonstrates 3-level nesting:
 
 Summary
 -------
+
+To inspect what the CLI discovered at startup, run:
+
+.. code-block:: bash
+
+   lmcache tool list-commands
+   lmcache tool list-commands --format json
+
+The JSON output includes each command's path, name, help text, type, and
+nesting depth.
 
 .. list-table::
    :header-rows: 1

@@ -6,21 +6,28 @@ This guide explains how to add new subcommands to the ``lmcache`` CLI.
 Architecture Overview
 ---------------------
 
-The CLI uses explicit command registration:
+The CLI uses plugin-style auto-discovery instead of manual command
+registration:
 
 1. Each command is a class inheriting from ``BaseCommand``.
-2. Commands are instantiated and listed in a central ``ALL_COMMANDS`` registry.
-3. At startup, the entry point iterates ``ALL_COMMANDS`` and calls
-   ``cmd.register(subparsers)`` to wire up argparse.
+2. Top-level command modules live under ``lmcache/cli/commands/``.
+3. Command groups inherit from ``CompositeCommand`` and discover child
+   commands from their own package.
+4. At startup, discovered commands are instantiated into ``ALL_COMMANDS`` and
+   registered with argparse.
 
-``BaseCommand`` is an abstract class with a small set of required methods
-(name, help, argument registration, and execute). Forgetting any of them
-raises ``TypeError`` at instantiation time.
+``BaseCommand`` is an abstract class with a small set of required methods:
+``name()``, ``help()``, ``add_arguments()``, and ``execute()``. Forgetting any
+of them raises ``TypeError`` at instantiation time.
 
-Step-by-Step: Adding a New Command
------------------------------------
+For the complete extension walkthrough, including nested command groups, see
+:doc:`/extension/cli`.
 
-**Step 1.** Create a new command class that subclasses ``BaseCommand``:
+Adding a Top-Level Command
+--------------------------
+
+Create one new module under ``lmcache/cli/commands/`` with a concrete
+``BaseCommand`` subclass:
 
 .. code-block:: python
 
@@ -29,7 +36,9 @@ Step-by-Step: Adding a New Command
 
    from lmcache.cli.commands.base import BaseCommand
 
+
    class DescribeCommand(BaseCommand):
+       """Describe a running KV cache server."""
 
        def name(self) -> str:
            return "describe"
@@ -38,37 +47,52 @@ Step-by-Step: Adding a New Command
            return "Describe a running KV cache server."
 
        def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-           parser.add_argument("--url", required=True,
-                               help="LMCache HTTP server URL (e.g. http://localhost:8000)")
+           parser.add_argument(
+               "--url",
+               required=True,
+               help="LMCache HTTP server URL (e.g. http://localhost:8000)",
+           )
 
        def execute(self, args: argparse.Namespace) -> None:
-           # Connect to server, gather info...
            metrics = self.create_metrics("Describe KV Cache", args)
            metrics.add("status", "Status", "OK")
            metrics.add("chunks", "Cached chunks", 1024)
            metrics.emit()
 
-**Step 2.** Add an instance of it to the ``ALL_COMMANDS`` registry:
+No import or registry edit is required. ``lmcache/cli/commands/__init__.py``
+uses ``discover_subclasses`` to find concrete ``BaseCommand`` subclasses in
+direct child modules and packages.
 
-.. code-block:: python
+Adding a Nested Command
+-----------------------
 
-   from lmcache.cli.commands.describe import DescribeCommand
+To add a command under an existing ``CompositeCommand`` group, add a concrete
+``BaseCommand`` subclass as a sibling module inside that group's package. For
+example, ``lmcache tool list-commands`` lives under ``lmcache/cli/commands/tool/``
+and is discovered by ``ToolCommand`` without editing ``tool/__init__.py``.
 
-   ALL_COMMANDS: list[BaseCommand] = [
-       # ... existing commands ...
-       DescribeCommand(),   # add here
-   ]
+Use modules prefixed with ``_`` for helpers, such as ``_helpers.py``. They are
+excluded from auto-discovery.
 
-That's it --- ``lmcache describe --url http://localhost:8000`` is now available.
+Inspecting Discovered Commands
+------------------------------
+
+Run the built-in command tree inspector to see what the auto-discovery path
+registered:
+
+.. code-block:: bash
+
+   lmcache tool list-commands
+   lmcache tool list-commands --format json
 
 Using the Metrics System
 ------------------------
 
 The metrics system uses a **handler + formatter** architecture:
 
-- **Metrics** — the collector. Holds sections and entries.
-- **Handler** — the destination (stdout, file, etc.).
-- **Formatter** — the rendering (ASCII table, JSON, etc.).
+- **Metrics** - the collector. Holds sections and entries.
+- **Handler** - the destination (stdout, file, etc.).
+- **Formatter** - the rendering (ASCII table, JSON, etc.).
 
 ``BaseCommand.create_metrics()`` sets up default handlers automatically, so
 command authors just build metrics and call ``emit()``:
@@ -76,21 +100,14 @@ command authors just build metrics and call ``emit()``:
 .. code-block:: python
 
    def execute(self, args: argparse.Namespace) -> None:
-       # create_metrics() auto-registers:
-       #   - StreamHandler → stdout (formatter chosen by --format, default: terminal)
-       #   - FileHandler   → if --output is set (same format as --format)
        metrics = self.create_metrics("Bench KV Cache Result", args)
 
-       # Create named sections
        metrics.add_section("ops", "Operations (ops/s)")
        metrics["ops"].add("store", "Store", 41.3)
        metrics["ops"].add("retrieve", "Retrieve", 127.3)
 
-       # Top-level metrics (no section header)
        metrics.add("status", "Status", "OK")
-
-       # Trigger all handlers
        metrics.emit()
 
-The ``--format`` and ``--output`` flags are added automatically by
-``BaseCommand.register()`` — subcommands do not need to add them manually.
+The ``--format``, ``--output``, and ``--quiet`` flags are added automatically by
+``BaseCommand.register()``. Subcommands do not need to add them manually.
